@@ -10,12 +10,11 @@
   <header class="topbar">
     <div class="brand">Trading Demo</div>
 
-    <!-- Selector de símbolo -->
+    <!-- Selector de símbolo (con valor por defecto, sin "Cargando…") -->
     <div class="symbol-wrap">
       <label for="symbolSelect" class="label">Símbolo</label>
       <select id="symbolSelect" class="symbol-select">
-        <!-- Se llenará dinámicamente desde /api/symbols -->
-        <option>Cargando…</option>
+        <option value="BTCUSDT">BTC/USDT</option>
       </select>
     </div>
 
