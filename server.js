@@ -6,12 +6,12 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // frontend lo pondremos luego
+app.use(express.static("public")); // frontend
 
 // --------- Estado en memoria (demo) ---------
 const state = {
   symbol: "BTCUSDT",
-  price: 60000,        // precio inicial
+  price: 60000,        // precio inicial (se sobrescribe con live)
   balance: 1000,       // USD demo
   positions: [],       // abiertas
   history: []          // cerradas
@@ -19,17 +19,42 @@ const state = {
 
 let nextId = 1;
 
-// --------- Precio simulado (random walk) ---------
+// --------- Simulación (fallback) ---------
 function stepPrice() {
-  // volatilidad controlada
-  const drift = 0; // sin sesgo
+  const drift = 0;
   const vol = 0.0008; // 0.08%
   const shock = state.price * (drift + (Math.random() - 0.5) * 2 * vol);
-  state.price = Math.max(100, state.price + shock); // nunca negativo
+  state.price = Math.max(100, state.price + shock);
 }
-setInterval(() => {
-  stepPrice();
-  // Auto-chequeo TP/SL y liquidaciones simples
+
+// ===== Precio en vivo (KuCoin, sin API keys) con fallback a simulación =====
+const LIVE_SYMBOL = "BTCUSDT"; // debe coincidir con el widget (KUCOIN:BTCUSDT)
+
+function toKucoinSymbol(sym) {
+  return sym.includes("-") ? sym : sym.replace(/USDT$/i, "-USDT"); // BTCUSDT -> BTC-USDT
+}
+
+async function fetchKucoinPrice(sym) {
+  const kSym = toKucoinSymbol(sym);
+  const url = `https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=${kSym}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`KuCoin HTTP ${res.status}`);
+  const json = await res.json();
+  const px = Number(json?.data?.price);
+  if (!isFinite(px) || px <= 0) throw new Error("Precio KuCoin inválido");
+  return px;
+}
+
+async function tickLoop() {
+  try {
+    // Intentar siempre precio real de KuCoin
+    state.price = await fetchKucoinPrice(LIVE_SYMBOL);
+  } catch (_e) {
+    // Si falla, simular un paso para no congelar
+    stepPrice();
+  }
+
+  // Auto-chequeo TP/SL
   const now = Date.now();
   for (let i = state.positions.length - 1; i >= 0; i--) {
     const p = state.positions[i];
@@ -40,9 +65,13 @@ setInterval(() => {
       closePosition(p.id, hitTP ? "TP" : "SL", now);
     }
   }
-  // Empuja tick a los clientes SSE
+
+  // Emitir tick a clientes
   broadcastSSE({ type: "tick", symbol: state.symbol, price: state.price, ts: Date.now() });
-}, 1000);
+}
+
+// Reemplaza cualquier setInterval anterior por este:
+setInterval(tickLoop, 1000);
 
 // --------- SSE: /api/stream (precio en vivo) ---------
 const sseClients = new Set();
@@ -149,6 +178,7 @@ app.post("/api/reset", (req, res) => {
   });
 });
 
+// --------- Helpers de trading ---------
 function closePosition(id, reason, tsClose) {
   const idx = state.positions.findIndex(p => p.id === id);
   if (idx === -1) return null;
@@ -173,7 +203,6 @@ function closePosition(id, reason, tsClose) {
 }
 
 function calcPnL(p, exitPrice) {
-  // tamaño nocional = margen * leverage
   const notional = p.amount * p.leverage;
   const change = (exitPrice - p.entryPrice) / p.entryPrice;
   const dir = p.side === "BUY" ? 1 : -1;
