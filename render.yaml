@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: trading-demo
+    env: node
+    plan: free
+    region: oregon
+    buildCommand: "npm install"
+    startCommand: "npm start"
+    autoDeploy: true
+    healthCheckPath: "/healthz"
