@@ -94,7 +94,7 @@ async function closePosition(id) {
   if (!json.ok) alert("No se pudo cerrar la posición");
 }
 
-// ===================== Símbolos (con fallback robusto) =====================
+// ===================== Símbolos (fallback inmediato + fetch con timeout) =====================
 async function loadSymbols() {
   const FALLBACK = [
     "BTCUSDT","BNBUSDT","ADAUSDT","UNIUSDT","XRPUSDT",
@@ -102,20 +102,24 @@ async function loadSymbols() {
     "SUIUSDT","AVAXUSDT","ATPUSDT"
   ];
 
+  // 1) Pinta fallback inmediato (adiós "Cargando…")
+  fillSelect(FALLBACK);
+
+  // 2) Intenta traer la lista real con timeout de 4s
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 4000); // timeout 4s
+  const t = setTimeout(() => ctrl.abort(), 4000);
 
   try {
     const res = await fetch("/api/symbols", { cache: "no-store", signal: ctrl.signal });
     clearTimeout(t);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    const symbols = Array.isArray(data.symbols) && data.symbols.length ? data.symbols : FALLBACK;
-    fillSelect(symbols);
+    if (Array.isArray(data.symbols) && data.symbols.length) {
+      fillSelect(data.symbols); // sobrescribe fallback si llega bien
+    }
   } catch (e) {
-    console.warn("No pude cargar /api/symbols, usando fallback:", e?.message || e);
     clearTimeout(t);
-    fillSelect(FALLBACK);
+    console.warn("Fallo /api/symbols, dejo fallback:", e?.message || e);
   }
 }
 
