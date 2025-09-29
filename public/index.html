@@ -9,6 +9,16 @@
 <body>
   <header class="topbar">
     <div class="brand">Trading Demo</div>
+
+    <!-- Selector de símbolo -->
+    <div class="symbol-wrap">
+      <label for="symbolSelect" class="label">Símbolo</label>
+      <select id="symbolSelect" class="symbol-select">
+        <!-- Se llenará dinámicamente desde /api/symbols -->
+        <option>Cargando…</option>
+      </select>
+    </div>
+
     <div class="stats">
       <div class="stat">
         <span class="label">Precio</span>
@@ -23,6 +33,7 @@
         <span id="equity" class="value">—</span>
       </div>
     </div>
+
     <!-- Botón Reset -->
     <div class="actions-head">
       <button id="resetBtn" class="reset">Reset demo</button>
@@ -59,7 +70,7 @@
         <button id="buyBtn" class="buy">BUY</button>
         <button id="sellBtn" class="sell">SELL</button>
       </div>
-      <p class="hint">* Demo sin dinero real. Precios simulados (1 tick/seg).</p>
+      <p class="hint">* Demo sin dinero real. Precio desde KuCoin (sin API keys).</p>
     </section>
 
     <section class="card table">
