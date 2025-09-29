@@ -122,6 +122,33 @@ app.post("/api/close", (req, res) => {
   res.json({ ok: true, record });
 });
 
+// --------- Reset demo ---------
+function resetState({ balance = 1000, price = 60000 } = {}) {
+  state.symbol = "BTCUSDT";
+  state.price = Number(price);
+  state.balance = Number(balance);
+  state.positions = [];
+  state.history = [];
+  nextId = 1;
+}
+
+app.post("/api/reset", (req, res) => {
+  const { balance, price } = req.body || {};
+  resetState({ balance, price });
+  broadcastSSE({ type: "reset" });
+  res.json({
+    ok: true,
+    state: {
+      symbol: state.symbol,
+      price: state.price,
+      balance: state.balance,
+      equity: calcEquity(),
+      positions: state.positions,
+      history: state.history
+    }
+  });
+});
+
 function closePosition(id, reason, tsClose) {
   const idx = state.positions.findIndex(p => p.id === id);
   if (idx === -1) return null;
