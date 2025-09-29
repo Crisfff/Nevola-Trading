@@ -8,10 +8,28 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public")); // frontend
 
+// ====== PARES SOPORTADOS (USDT) ======
+const ALLOWED_SYMBOLS = [
+  "BTCUSDT",
+  "BNBUSDT",
+  "ADAUSDT",
+  "UNIUSDT",
+  "XRPUSDT",
+  "TRXUSDT",
+  "SOLUSDT",
+  "ETHUSDT",
+  "DOTUSDT",
+  "LTCUSDT",
+  "SUIUSDT",
+  "AVAXUSDT",
+  "ATPUSDT" // si no existe en KuCoin, hará fallback a simulación
+];
+const ALLOWED_SET = new Set(ALLOWED_SYMBOLS);
+
 // --------- Estado en memoria (demo) ---------
 const state = {
   symbol: "BTCUSDT",
-  price: 60000,        // precio inicial (se sobrescribe con live)
+  price: 60000,        // se sobrescribe con live
   balance: 1000,       // USD demo
   positions: [],       // abiertas
   history: []          // cerradas
@@ -27,15 +45,13 @@ function stepPrice() {
   state.price = Math.max(100, state.price + shock);
 }
 
-// ===== Precio en vivo (KuCoin, sin API keys) con fallback a simulación =====
-const LIVE_SYMBOL = "BTCUSDT"; // debe coincidir con el widget (KUCOIN:BTCUSDT)
-
+// ===== Helpers símbolo KuCoin =====
 function toKucoinSymbol(sym) {
   return sym.includes("-") ? sym : sym.replace(/USDT$/i, "-USDT"); // BTCUSDT -> BTC-USDT
 }
 
-async function fetchKucoinPrice(sym) {
-  const kSym = toKucoinSymbol(sym);
+async function fetchKucoinPrice(symNoDash) {
+  const kSym = toKucoinSymbol(symNoDash); // p.ej. BTC-USDT
   const url = `https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=${kSym}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`KuCoin HTTP ${res.status}`);
@@ -45,16 +61,17 @@ async function fetchKucoinPrice(sym) {
   return px;
 }
 
+// ===== Loop de precio: usa siempre state.symbol =====
 async function tickLoop() {
   try {
-    // Intentar siempre precio real de KuCoin
-    state.price = await fetchKucoinPrice(LIVE_SYMBOL);
+    // intenta precio real del símbolo actual
+    state.price = await fetchKucoinPrice(state.symbol);
   } catch (_e) {
-    // Si falla, simular un paso para no congelar
+    // si falla KuCoin (símbolo no existe o red), simula para no congelar
     stepPrice();
   }
 
-  // Auto-chequeo TP/SL
+  // Auto TP/SL
   const now = Date.now();
   for (let i = state.positions.length - 1; i >= 0; i--) {
     const p = state.positions[i];
@@ -66,11 +83,11 @@ async function tickLoop() {
     }
   }
 
-  // Emitir tick a clientes
+  // Emitir tick
   broadcastSSE({ type: "tick", symbol: state.symbol, price: state.price, ts: Date.now() });
 }
 
-// Reemplaza cualquier setInterval anterior por este:
+// Asegúrate de tener solo este intervalo activo:
 setInterval(tickLoop, 1000);
 
 // --------- SSE: /api/stream (precio en vivo) ---------
@@ -82,19 +99,33 @@ app.get("/api/stream", (req, res) => {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  res.write(`data: ${JSON.stringify({ type: "hello", price: state.price })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: "hello", price: state.price, symbol: state.symbol })}\n\n`);
   sseClients.add(res);
   req.on("close", () => sseClients.delete(res));
 });
 
 function broadcastSSE(payload) {
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of sseClients) {
-    res.write(msg);
-  }
+  for (const res of sseClients) res.write(msg);
 }
 
 // --------- API REST ---------
+
+// Lista de símbolos permitidos
+app.get("/api/symbols", (_req, res) => {
+  res.json({ symbols: ALLOWED_SYMBOLS });
+});
+
+// Cambiar símbolo actual
+app.post("/api/symbol", (req, res) => {
+  const raw = (req.body?.symbol || "").toUpperCase();
+  if (!ALLOWED_SET.has(raw)) {
+    return res.status(400).json({ ok: false, error: "Símbolo no permitido", allowed: ALLOWED_SYMBOLS });
+  }
+  state.symbol = raw; // ej: ETHUSDT
+  broadcastSSE({ type: "symbol", symbol: state.symbol });
+  res.json({ ok: true, symbol: state.symbol });
+});
 
 // Estado completo (balance, posiciones, historial)
 app.get("/api/state", (_req, res) => {
@@ -130,7 +161,6 @@ app.post("/api/order", (req, res) => {
     tsOpen: Date.now()
   };
 
-  // bloquear margen
   if (state.balance < position.amount) {
     return res.status(400).json({ error: "Balance insuficiente" });
   }
@@ -153,7 +183,6 @@ app.post("/api/close", (req, res) => {
 
 // --------- Reset demo ---------
 function resetState({ balance = 1000, price = 60000 } = {}) {
-  state.symbol = "BTCUSDT";
   state.price = Number(price);
   state.balance = Number(balance);
   state.positions = [];
@@ -186,8 +215,7 @@ function closePosition(id, reason, tsClose) {
   const exit = state.price;
   const pnl = calcPnL(p, exit);
 
-  // liberar margen + PnL
-  state.balance += p.amount + pnl;
+  state.balance += p.amount + pnl; // liberar margen + PnL
   const record = {
     ...p,
     exitPrice: exit,
@@ -196,7 +224,7 @@ function closePosition(id, reason, tsClose) {
     tsClose
   };
   state.positions.splice(idx, 1);
-  state.history.unshift(record); // último arriba
+  state.history.unshift(record);
 
   broadcastSSE({ type: "order_close", record, balance: round2(state.balance) });
   return record;
