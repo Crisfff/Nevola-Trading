@@ -1,4 +1,4 @@
-// Utils & selects
+// ===================== Utils & selects =====================
 const $ = (q) => document.querySelector(q);
 const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString();
 
@@ -21,7 +21,7 @@ let lastState = null;
 let currentSymbol = "BTCUSDT";
 let tvChart = null;
 
-// -------- TradingView --------
+// ===================== TradingView =====================
 function initTradingView(initial = "BTCUSDT") {
   if (!window.TradingView) {
     console.error("TradingView script no cargó todavía.");
@@ -46,7 +46,6 @@ function initTradingView(initial = "BTCUSDT") {
     hotlist: false,
     calendar: false,
   });
-
   window.tvWidget.onChartReady(() => {
     tvChart = window.tvWidget.chart();
   });
@@ -61,7 +60,7 @@ function setWidgetSymbol(symUSDT) {
   }
 }
 
-// -------- API helpers --------
+// ===================== API helpers =====================
 async function getState() {
   const res = await fetch("/api/state");
   const json = await res.json();
@@ -95,23 +94,43 @@ async function closePosition(id) {
   if (!json.ok) alert("No se pudo cerrar la posición");
 }
 
-// -------- Símbolos --------
+// ===================== Símbolos (con fallback robusto) =====================
 async function loadSymbols() {
+  const FALLBACK = [
+    "BTCUSDT","BNBUSDT","ADAUSDT","UNIUSDT","XRPUSDT",
+    "TRXUSDT","SOLUSDT","ETHUSDT","DOTUSDT","LTCUSDT",
+    "SUIUSDT","AVAXUSDT","ATPUSDT"
+  ];
+
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 4000); // timeout 4s
+
   try {
-    const res = await fetch("/api/symbols");
-    const { symbols } = await res.json();
-    els.symbolSelect.innerHTML = "";
-    symbols.forEach(s => {
-      const opt = document.createElement("option");
-      opt.value = s;
-      opt.textContent = s.replace("USDT", "/USDT");
-      els.symbolSelect.appendChild(opt);
-    });
-    els.symbolSelect.value = currentSymbol;
-  } catch {
-    // fallback simple
-    els.symbolSelect.innerHTML = `<option value="BTCUSDT">BTC/USDT</option>`;
+    const res = await fetch("/api/symbols", { cache: "no-store", signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const symbols = Array.isArray(data.symbols) && data.symbols.length ? data.symbols : FALLBACK;
+    fillSelect(symbols);
+  } catch (e) {
+    console.warn("No pude cargar /api/symbols, usando fallback:", e?.message || e);
+    clearTimeout(t);
+    fillSelect(FALLBACK);
   }
+}
+
+function fillSelect(list) {
+  if (!els.symbolSelect) return;
+  els.symbolSelect.innerHTML = "";
+  list.forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = s;
+    opt.textContent = s.replace("USDT", "/USDT");
+    els.symbolSelect.appendChild(opt);
+  });
+  const sym = (lastState?.symbol) || currentSymbol || "BTCUSDT";
+  currentSymbol = sym;
+  els.symbolSelect.value = sym;
 }
 
 async function changeSymbol(sym) {
@@ -125,15 +144,14 @@ async function changeSymbol(sym) {
     if (!json.ok) throw new Error(json.error || "No se pudo cambiar símbolo");
     currentSymbol = json.symbol;
     setWidgetSymbol(currentSymbol);
-    // refrescar estado para que tablas/price queden consistentes
-    getState();
+    getState(); // refresca tablas y price
   } catch (e) {
     alert(e.message);
-    els.symbolSelect.value = currentSymbol; // revert
+    els.symbolSelect.value = currentSymbol; // revert si falla
   }
 }
 
-// -------- Reset demo --------
+// ===================== Reset demo =====================
 async function resetDemo() {
   const res = await fetch("/api/reset", {
     method: "POST",
@@ -144,9 +162,10 @@ async function resetDemo() {
   if (json.ok) renderState(json.state);
 }
 
-// -------- Render --------
+// ===================== Render =====================
 function renderState(st) {
   lastState = st;
+
   if (st.symbol && st.symbol !== currentSymbol) {
     currentSymbol = st.symbol;
     if (els.symbolSelect) els.symbolSelect.value = currentSymbol;
@@ -204,9 +223,9 @@ function pnlNow(p, price) {
   return Math.round(notional * chg * dir * 100) / 100;
 }
 
-// -------- Init --------
+// ===================== Init =====================
 function init() {
-  initTradingView(currentSymbol); // inicia widget
+  initTradingView(currentSymbol); // widget
 
   // Controles
   els.buyBtn.addEventListener("click", () => place("BUY"));
@@ -219,7 +238,7 @@ function init() {
     els.symbolSelect.addEventListener("change", (e) => changeSymbol(e.target.value));
   }
 
-  // Stream de precios (SSE)
+  // SSE de precios
   const es = new EventSource("/api/stream");
   es.onmessage = (ev) => {
     try {
@@ -234,7 +253,6 @@ function init() {
           );
         }
       } else if (msg.type === "symbol") {
-        // si el backend cambia el símbolo, sincroniza UI y widget
         currentSymbol = msg.symbol;
         if (els.symbolSelect) els.symbolSelect.value = currentSymbol;
         setWidgetSymbol(currentSymbol);
@@ -246,7 +264,7 @@ function init() {
     } catch {}
   };
 
-  // Pull suave para refrescar tablas
+  // Pull suave para tablas
   setInterval(getState, 3000);
   getState();
 }
