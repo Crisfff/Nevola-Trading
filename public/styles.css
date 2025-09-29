@@ -67,3 +67,16 @@ button:active { transform: translateY(1px); }
 @media (max-width: 980px) {
   .grid { grid-template-columns: 1fr; }
 }
+
+/* ---- TradingView ---- */
+.tv-chart {
+  width: 100%;
+  height: 420px;          /* altura por defecto en desktop */
+  min-height: 320px;      /* evita que se haga muy pequeño */
+}
+
+@media (max-width: 768px) {
+  .tv-chart {
+    height: 300px;        /* altura reducida en móvil */
+  }
+}
