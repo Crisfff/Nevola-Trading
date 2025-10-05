@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import fetch from "node-fetch"; // ✅ asegura fetch en Node <18
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -53,7 +54,9 @@ function toKucoinSymbol(sym) {
 async function fetchKucoinPrice(symNoDash) {
   const kSym = toKucoinSymbol(symNoDash); // p.ej. BTC-USDT
   const url = `https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=${kSym}`;
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: { "User-Agent": "trading-demo/1.0 (+https://render.com)" } // UA amable
+  });
   if (!res.ok) throw new Error(`KuCoin HTTP ${res.status}`);
   const json = await res.json();
   const px = Number(json?.data?.price);
@@ -96,12 +99,24 @@ const sseClients = new Set();
 app.get("/api/stream", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "no-cache, no-transform", // ✅ evita compresión/transform
     Connection: "keep-alive",
   });
+
+  // salud inicial
   res.write(`data: ${JSON.stringify({ type: "hello", price: state.price, symbol: state.symbol })}\n\n`);
+
   sseClients.add(res);
-  req.on("close", () => sseClients.delete(res));
+
+  // ✅ heartbeat para que proxies no corten
+  const hb = setInterval(() => {
+    res.write(`: ping\n\n`); // comment line SSE
+  }, 15000);
+
+  req.on("close", () => {
+    clearInterval(hb);
+    sseClients.delete(res);
+  });
 });
 
 function broadcastSSE(payload) {
