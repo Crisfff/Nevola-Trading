@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Trading Demo — BTCUSDT</title>
+  <title>Trading Demo — BTC/ETH/XRP/BNB</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">Trading Demo</div>
 
-    <!-- Selector de símbolo (con valor por defecto, sin "Cargando…") -->
     <div class="symbol-wrap">
       <label for="symbolSelect" class="label">Símbolo</label>
       <select id="symbolSelect" class="symbol-select">
+        <!-- Se rellena desde /api/symbols -->
         <option value="BTCUSDT">BTC/USDT</option>
       </select>
     </div>
@@ -33,7 +33,6 @@
       </div>
     </div>
 
-    <!-- Botón Reset -->
     <div class="actions-head">
       <button id="resetBtn" class="reset">Reset demo</button>
     </div>
@@ -41,7 +40,6 @@
 
   <main class="grid">
     <section class="card chart">
-      <!-- Contenedor TradingView -->
       <div id="tradingview_chart" class="tv-chart"></div>
     </section>
 
@@ -105,7 +103,7 @@
   </footer>
 
   <!-- TradingView Widget -->
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script src="https://s3.tradingview.com/tv.js"></script>
   <script src="app.js" defer></script>
 </body>
 </html>
