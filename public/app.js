@@ -1,3 +1,4 @@
+// public/app.js
 const $ = (q) => document.querySelector(q);
 const fmt = (n) => (Math.round(n * 100) / 100).toFixed(2);
 
@@ -18,6 +19,8 @@ const els = {
 };
 
 let currentSymbol = "BTCUSDT";
+let lastState = null;   // <- cache local para recalcular UPnL y equity
+let lastPrice = null;
 
 // ----- TradingView -----
 function mountTV(sym) {
@@ -32,8 +35,6 @@ function mountTV(sym) {
     style: "1",
     locale: "es",
     container_id: "tradingview_chart",
-    hide_top_toolbar: false,
-    hide_legend: false,
   });
 }
 
@@ -53,18 +54,35 @@ async function jpost(url, body) {
   return r.json();
 }
 
-// ----- UI update -----
+// ---- Cálculos ----
+function calcUPnL(p, cur) {
+  const notional = p.amount * p.leverage;
+  const change = (cur - p.entryPrice) / p.entryPrice;
+  const dir = p.side === "BUY" ? 1 : -1;
+  return notional * change * dir;
+}
+function sumUPnL(positions, cur) {
+  return positions.reduce((acc, p) => acc + calcUPnL(p, cur), 0);
+}
+
+// ----- UI render -----
 async function refreshState() {
   const s = await jget("/api/state");
+  lastState = s;
   currentSymbol = s.symbol;
+  lastPrice = s.price;
+
+  // símbolo y precio
   els.select.value = s.symbol;
   els.price.textContent = fmt(s.price);
+
+  // account
   els.balance.textContent = fmt(s.balance);
   els.equity.textContent = fmt(s.equity);
 
   // abiertas
   els.openBody.innerHTML = s.positions.map(p => `
-    <tr>
+    <tr data-row="${p.id}">
       <td>${p.id}</td>
       <td>${p.side}</td>
       <td>${fmt(p.entryPrice)}</td>
@@ -72,7 +90,7 @@ async function refreshState() {
       <td>${fmt(p.slPrice)}</td>
       <td>${fmt(p.amount)}</td>
       <td>${p.leverage}</td>
-      <td>${fmt(calcUPnL(p, s.price))}</td>
+      <td class="upnl">0.00</td>
       <td><button class="close" data-id="${p.id}">Cerrar</button></td>
     </tr>
   `).join("");
@@ -90,13 +108,24 @@ async function refreshState() {
       <td>${h.reason}</td>
     </tr>
   `).join("");
+
+  // primer render de UPnL con el precio actual
+  updateLivePnL(lastPrice);
 }
 
-function calcUPnL(p, cur) {
-  const notional = p.amount * p.leverage;
-  const change = (cur - p.entryPrice) / p.entryPrice;
-  const dir = p.side === "BUY" ? 1 : -1;
-  return notional * change * dir;
+function updateLivePnL(curPrice) {
+  if (!lastState) return;
+  // actualizar cada celda .upnl
+  for (const p of lastState.positions) {
+    const row = els.openBody.querySelector(`tr[data-row="${p.id}"] .upnl`);
+    if (!row) continue;
+    const u = calcUPnL(p, curPrice);
+    row.textContent = fmt(u);
+    row.style.color = u >= 0 ? "#22c55e" : "#ef4444";
+  }
+  // equity en vivo = balance + sum(UPnL)
+  const liveEquity = lastState.balance + sumUPnL(lastState.positions, curPrice);
+  els.equity.textContent = fmt(liveEquity);
 }
 
 // ----- SSE -----
@@ -104,12 +133,18 @@ function connectSSE() {
   const es = new EventSource("/api/stream");
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === "hello" || msg.type === "tick") {
+
+    if ((msg.type === "hello" || msg.type === "tick") && msg.symbol) {
+      // solo si es el símbolo actual
       if (msg.symbol === currentSymbol) {
-        els.price.textContent = fmt(msg.price);
+        lastPrice = msg.price;
+        els.price.textContent = fmt(lastPrice);
+        // recalcula UPnL y equity sin pedir /api/state
+        updateLivePnL(lastPrice);
       }
     }
-    if (msg.type === "order_open" || msg.type === "order_close" || msg.type === "reset") {
+    if (msg.type === "symbol" || msg.type === "order_open" || msg.type === "order_close" || msg.type === "reset") {
+      // cuando cambia estructura de posiciones o símbolo, sí pedimos estado completo
       refreshState();
     }
   };
@@ -118,61 +153,63 @@ function connectSSE() {
 connectSSE();
 
 // ----- Eventos UI -----
+$("#openBody").addEventListener("click", async (e) => {
+  const id = e.target?.dataset?.id;
+  if (!id) return;
+  await jpost("/api/close", { id: Number(id) });
+  await refreshState();
+});
+
 els.select.addEventListener("change", async (e) => {
   const sym = e.target.value;
   await jpost("/api/symbol", { symbol: sym });
   currentSymbol = sym;
   mountTV(sym);
-  refreshState();
+  await refreshState();
 });
 
 els.buy.addEventListener("click", async () => {
   const payload = {
     side: "BUY",
-    amount: Number(els.amount.value),
-    leverage: Number(els.leverage.value),
-    tpPct: Number(els.tpPct.value),
-    slPct: Number(els.slPct.value),
+    amount: Math.max(1, Number(els.amount.value || 0)),
+    leverage: Math.min(100, Math.max(1, Number(els.leverage.value || 1))),
+    tpPct: Math.max(0.1, Number(els.tpPct.value || 2)),
+    slPct: Math.max(0.1, Number(els.slPct.value || 2)),
   };
   await jpost("/api/order", payload);
-  refreshState();
+  await refreshState();
 });
 
 els.sell.addEventListener("click", async () => {
   const payload = {
     side: "SELL",
-    amount: Number(els.amount.value),
-    leverage: Number(els.leverage.value),
-    tpPct: Number(els.tpPct.value),
-    slPct: Number(els.slPct.value),
+    amount: Math.max(1, Number(els.amount.value || 0)),
+    leverage: Math.min(100, Math.max(1, Number(els.leverage.value || 1))),
+    tpPct: Math.max(0.1, Number(els.tpPct.value || 2)),
+    slPct: Math.max(0.1, Number(els.slPct.value || 2)),
   };
   await jpost("/api/order", payload);
-  refreshState();
+  await refreshState();
 });
 
 els.reset.addEventListener("click", async () => {
   await jpost("/api/reset", { balance: 1000 });
-  refreshState();
-});
-
-// cerrar desde tabla
-$("#openBody").addEventListener("click", async (e) => {
-  const id = e.target?.dataset?.id;
-  if (!id) return;
-  await jpost("/api/close", { id: Number(id) });
-  refreshState();
+  await refreshState();
 });
 
 // ----- Inicialización -----
 (async function init() {
-  // llena select con /api/symbols
+  // llena selector con los símbolos del backend
   try {
     const { symbols } = await jget("/api/symbols");
-    // conserva el valor actual si existe
-    const current = els.select.value || "BTCUSDT";
-    els.select.innerHTML = symbols.map(s => `<option value="${s}">${s.replace("USDT","")}/USDT</option>`).join("");
-    els.select.value = current;
-  } catch {}
+    const base = symbols.filter(s => ["BTCUSDT","ETHUSDT","XRPUSDT","BNBUSDT"].includes(s));
+    const list = base.length ? base : symbols;
+    els.select.innerHTML = list.map(s => `<option value="${s}">${s.replace("USDT","")}/USDT</option>`).join("");
+  } catch {
+    // fallback mínimo
+    els.select.innerHTML = ["BTCUSDT","ETHUSDT","XRPUSDT","BNBUSDT"]
+      .map(s => `<option value="${s}">${s.replace("USDT","")}/USDT</option>`).join("");
+  }
   mountTV(currentSymbol);
-  refreshState();
+  await refreshState();
 })();
